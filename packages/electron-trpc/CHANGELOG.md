@@ -1,5 +1,12 @@
 # electron-trpc
 
+## 0.7.2
+
+### Patch Changes
+
+- [`27e6a9c`](https://github.com/new-cad/electron-trpc/commit/27e6a9c87fc7d551bdad0c41917d3130bc952136) Thanks [@notsapinho](https://github.com/notsapinho)! - Fixes the race condition when having multiple clients
+  Update dependencies
+
 ## 0.7.1
 
 ### Patch Changes
