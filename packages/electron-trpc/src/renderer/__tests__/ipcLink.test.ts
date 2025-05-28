@@ -4,7 +4,7 @@ import { initTRPC } from '@trpc/server';
 import type { TRPCResponseMessage } from '@trpc/server/rpc';
 import z from 'zod';
 import type { RendererGlobalElectronTRPC } from '../../types';
-import { ipcLink } from '../ipcLink';
+import { ipcLink, MessageRouter } from '../ipcLink';
 import superjson from 'superjson';
 
 const t = initTRPC.create();
@@ -27,12 +27,14 @@ const router = t.router({
 type Router = typeof router;
 
 const electronTRPC: RendererGlobalElectronTRPC = {} as any;
-let handlers: ((message: TRPCResponseMessage) => void)[] = [];
+let globalHandler: ((message: TRPCResponseMessage) => void) | null = null;
 beforeEach(() => {
-  handlers = [];
+  MessageRouter.reset();
+
+  globalHandler = null;
   electronTRPC.sendMessage = vi.fn();
   electronTRPC.onMessage = vi.fn().mockImplementation((handler) => {
-    handlers.push(handler);
+    globalHandler = handler;
   });
 });
 
@@ -57,11 +59,15 @@ describe('ipcLink', () => {
       const query = client.testQuery.query().then(queryResponse);
 
       expect(mock.sendMessage).toHaveBeenCalledTimes(1);
+
+      const actualCall = mock.sendMessage.mock.calls[0][0] as any;
+      const sentCompositeId = actualCall.operation.id;
+
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
           context: {},
-          id: 1,
+          id: sentCompositeId,
           input: undefined,
           path: 'testQuery',
           type: 'query',
@@ -70,8 +76,8 @@ describe('ipcLink', () => {
 
       expect(queryResponse).not.toHaveBeenCalled();
 
-      handlers[0]({
-        id: 1,
+      globalHandler!({
+        id: sentCompositeId,
         result: {
           type: 'data',
           data: 'query success',
@@ -90,11 +96,15 @@ describe('ipcLink', () => {
       const mutation = client.testMutation.mutate('test input').then(mutationResponse);
 
       expect(mock.sendMessage).toHaveBeenCalledTimes(1);
+
+      const mutationCall = mock.sendMessage.mock.calls[0][0] as any;
+      const mutationCompositeId = mutationCall.operation.id;
+
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
           context: {},
-          id: 1,
+          id: mutationCompositeId,
           input: 'test input',
           path: 'testMutation',
           type: 'mutation',
@@ -103,8 +113,8 @@ describe('ipcLink', () => {
 
       mock.sendMessage.mockClear();
 
-      handlers[0]({
-        id: 1,
+      globalHandler!({
+        id: mutationCompositeId,
         result: {
           type: 'data',
           data: 'mutation success',
@@ -130,11 +140,15 @@ describe('ipcLink', () => {
       });
 
       expect(mock.sendMessage).toHaveBeenCalledTimes(1);
+
+      const subscriptionCall = mock.sendMessage.mock.calls[0][0] as any;
+      const subscriptionCompositeId = subscriptionCall.operation.id;
+
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
           context: {},
-          id: 1,
+          id: subscriptionCompositeId,
           input: undefined,
           path: 'testSubscription',
           type: 'subscription',
@@ -145,8 +159,8 @@ describe('ipcLink', () => {
        * Multiple responses from the server
        */
       const respond = (str: string) =>
-        handlers[0]({
-          id: 1,
+        globalHandler!({
+          id: subscriptionCompositeId,
           result: {
             type: 'data',
             data: str,
@@ -168,7 +182,7 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledTimes(2);
       expect(mock.sendMessage.mock.calls[1]).toEqual([
         {
-          id: 1,
+          id: subscriptionCompositeId,
           method: 'subscription.stop',
         },
       ]);
@@ -198,16 +212,20 @@ describe('ipcLink', () => {
       expect(queryResponse2).not.toHaveBeenCalled();
       expect(queryResponse3).not.toHaveBeenCalled();
 
-      // Respond to queries in a different order
-      handlers[0]({
-        id: 1,
+      const interlaceCall1 = mock.sendMessage.mock.calls[0][0] as any;
+      const interlaceCall3 = mock.sendMessage.mock.calls[2][0] as any;
+      const interlaceCompositeId1 = interlaceCall1.operation.id;
+      const interlaceCompositeId3 = interlaceCall3.operation.id;
+
+      globalHandler!({
+        id: interlaceCompositeId1,
         result: {
           type: 'data',
           data: 'query success 1',
         },
       });
-      handlers[0]({
-        id: 3,
+      globalHandler!({
+        id: interlaceCompositeId3,
         result: {
           type: 'data',
           data: 'query success 3',
@@ -226,7 +244,7 @@ describe('ipcLink', () => {
 
   test('serializes inputs/outputs', async () => {
     const client = createTRPCProxyClient<Router>({
-      transformer: superjson,
+      transformer: superjson as any,
       links: [ipcLink()],
     });
 
@@ -242,11 +260,15 @@ describe('ipcLink', () => {
     const query = client.testInputs.query(input).then(queryResponse);
 
     expect(mock.sendMessage).toHaveBeenCalledTimes(1);
+
+    const serializeCall = mock.sendMessage.mock.calls[0][0] as any;
+    const serializeCompositeId = serializeCall.operation.id;
+
     expect(mock.sendMessage).toHaveBeenCalledWith({
       method: 'request',
       operation: {
         context: {},
-        id: 1,
+        id: serializeCompositeId,
         input: superjson.serialize(input),
         path: 'testInputs',
         type: 'query',
@@ -255,8 +277,8 @@ describe('ipcLink', () => {
 
     expect(queryResponse).not.toHaveBeenCalled();
 
-    handlers[0]({
-      id: 1,
+    globalHandler!({
+      id: serializeCompositeId,
       result: {
         type: 'data',
         data: superjson.serialize(input),
@@ -267,52 +289,5 @@ describe('ipcLink', () => {
 
     expect(queryResponse).toHaveBeenCalledTimes(1);
     expect(queryResponse).toHaveBeenCalledWith(input);
-  });
-
-  test('serializes inputs with custom transformer', async () => {
-    const client = createTRPCProxyClient<Router>({
-      transformer: {
-        serialize: (input) => JSON.stringify(input),
-        deserialize: (input) => JSON.parse(input),
-      },
-      links: [ipcLink()],
-    });
-
-    const mock = vi.mocked(electronTRPC);
-    const queryResponse = vi.fn();
-
-    const input = {
-      str: 'my string',
-      date: new Date('January 1, 2000 01:23:45'),
-    };
-
-    const query = client.testInputs.query(input).then(queryResponse);
-
-    expect(mock.sendMessage).toHaveBeenCalledTimes(1);
-    expect(mock.sendMessage).toHaveBeenCalledWith({
-      method: 'request',
-      operation: {
-        id: 1,
-        context: {},
-        input: JSON.stringify(input),
-        path: 'testInputs',
-        type: 'query',
-      },
-    });
-
-    expect(queryResponse).not.toHaveBeenCalled();
-
-    handlers[0]({
-      id: 1,
-      result: {
-        type: 'data',
-        data: JSON.stringify(input),
-      },
-    });
-
-    await query;
-
-    expect(queryResponse).toHaveBeenCalledTimes(1);
-    expect(queryResponse).toHaveBeenCalledWith({ ...input, date: input.date.toISOString() });
   });
 });

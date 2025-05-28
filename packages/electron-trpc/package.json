@@ -1,14 +1,13 @@
 {
-  "name": "electron-trpc",
+  "name": "@new-cad/electron-trpc",
   "description": "Electron support for tRPC",
   "version": "0.7.1",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jsonnull/electron-trpc.git"
+    "url": "https://github.com/new-cad/electron-trpc.git"
   },
-  "homepage": "https://electron-trpc.dev",
   "bugs": {
-    "url": "https://github.com/jsonnull/electron-trpc/issues"
+    "url": "https://github.com/new-cad/electron-trpc/issues"
   },
   "keywords": [
     "electron",
@@ -29,7 +28,6 @@
       "types": "./dist/renderer.d.ts"
     }
   },
-  "author": "Jason Nall <jsonnull@gmail.com>",
   "license": "MIT",
   "files": [
     "dist",
@@ -50,22 +48,22 @@
     "release": "changeset publish"
   },
   "devDependencies": {
-    "@tanstack/react-query": "^5.32.1",
+    "@tanstack/react-query": "^5.77.2",
     "@trpc/client": "10.45.2",
     "@trpc/server": "10.45.2",
     "@types/debug": "^4.1.12",
-    "@types/node": "^20.12.8",
-    "@vitest/coverage-v8": "^1.6.0",
+    "@types/node": "^20.17.52",
+    "@vitest/coverage-v8": "^1.6.1",
     "builtin-modules": "^4.0.0",
     "dts-bundle-generator": "9.5.1",
     "electron": "29.3.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "superjson": "^2.2.1",
-    "vite": "^5.2.11",
+    "superjson": "^2.2.2",
+    "vite": "^5.4.19",
     "vite-plugin-commonjs-externals": "^0.1.4",
-    "vitest": "^1.6.0",
-    "zod": "^3.23.6"
+    "vitest": "^1.6.1",
+    "zod": "^3.25.32"
   },
   "peerDependencies": {
     "@trpc/client": ">10.0.0",
@@ -73,6 +71,6 @@
     "electron": ">19.0.0"
   },
   "dependencies": {
-    "debug": "^4.3.4"
+    "debug": "^4.4.1"
   }
 }

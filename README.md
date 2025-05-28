@@ -1,16 +1,4 @@
-# electron-trpc
-
-<p>
-  <a href="https://www.npmjs.com/package/electron-trpc">
-    <img alt="NPM" src="https://img.shields.io/npm/v/electron-trpc"/>
-  </a>
-  <a href="https://codecov.io/gh/jsonnull/electron-trpc"> 
-  <img src="https://codecov.io/gh/jsonnull/electron-trpc/branch/main/graph/badge.svg?token=DU33O0D9LZ"/> 
-  </a>
-  <span>
-    <img alt="MIT" src="https://img.shields.io/npm/l/electron-trpc"/>
-  </span>
-</p>
+# @new-cad/electron-trpc
 
 <p></p>
 
@@ -25,13 +13,13 @@
 
 ```sh
 # Using pnpm
-pnpm add electron-trpc
+pnpm add @new-cad/electron-trpc
 
 # Using yarn
-yarn add electron-trpc
+yarn add @new-cad/electron-trpc
 
 # Using npm
-npm install --save electron-trpc
+npm install --save @new-cad/electron-trpc
 ```
 
 ## Basic Setup
@@ -40,7 +28,7 @@ npm install --save electron-trpc
 
    ```ts
    import { app } from 'electron';
-   import { createIPCHandler } from 'electron-trpc/main';
+   import { createIPCHandler } from '@new-cad/electron-trpc/main';
    import { router } from './api';
 
    app.on('ready', () => {
@@ -58,20 +46,20 @@ npm install --save electron-trpc
 2. Expose the IPC to the render process from the [preload file](https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts):
 
    ```ts
-   import { exposeElectronTRPC } from 'electron-trpc/main';
+   import { exposeElectronTRPC } from '@new-cad/electron-trpc/main';
 
    process.once('loaded', async () => {
      exposeElectronTRPC();
    });
    ```
 
-   > Note: `electron-trpc` depends on `contextIsolation` being enabled, which is the default.
+   > Note: `@new-cad/electron-trpc` depends on `contextIsolation` being enabled, which is the default.
 
 3. When creating the client in the render process, use the `ipcLink` (instead of the HTTP or batch HTTP links):
 
    ```ts
    import { createTRPCProxyClient } from '@trpc/client';
-   import { ipcLink } from 'electron-trpc/renderer';
+   import { ipcLink } from '@new-cad/electron-trpc/renderer';
 
    export const client = createTRPCProxyClient({
      links: [ipcLink()],

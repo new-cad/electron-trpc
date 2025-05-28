@@ -4,20 +4,22 @@ on:
   push:
     branches:
       - main
-      - next
-env:
-  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions: write-all
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '18.x'
+          scope: '@new-cad'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - uses: changesets/action@v1
