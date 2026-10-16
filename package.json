@@ -4,6 +4,7 @@
     "build": "corepack pnpm -r build",
     "test": "corepack pnpm -r test",
     "test:ci": "corepack pnpm -r test:ci",
+    "test:electron": "corepack pnpm -r test:electron",
     "lint": "prettier --check .",
     "lint:fix": "prettier --write .",
     "prepublishOnly": "corepack pnpm build",
@@ -11,18 +12,24 @@
     "changeset:version": "changeset version && pnpm install --no-frozen-lockfile",
     "release": "changeset publish"
   },
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@10.34.7",
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.1",
-    "@changesets/cli": "^2.29.4",
-    "prettier": "^3.5.3",
-    "typescript": "^5.8.3"
+    "@changesets/changelog-github": "^1.0.1",
+    "@changesets/cli": "^3.0.3",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3"
   },
   "engines": {
-    "node": ">=18",
-    "pnpm": ">=9"
+    "node": ">=22.12.0",
+    "pnpm": ">=10"
   },
   "pnpm": {
+    "overrides": {
+      "typescript": "$typescript"
+    },
+    "onlyBuiltDependencies": [
+      "electron"
+    ],
     "requiredScripts": [
       "build"
     ]

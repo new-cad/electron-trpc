@@ -1,232 +1,228 @@
-import { Operation, TRPCClientError, TRPCLink } from '@trpc/client';
-import type { AnyRouter, inferRouterContext, ProcedureType } from '@trpc/server';
+import { type Operation, TRPCClientError, type TRPCLink } from '@trpc/client';
+import type { AnyRouter, CombinedDataTransformer, DataTransformer } from '@trpc/server';
 import type { TRPCResponseMessage } from '@trpc/server/rpc';
-import type { RendererGlobalElectronTRPC, ETRPCRequest } from '../types';
-import { observable, Observer } from '@trpc/server/observable';
+import type { RendererGlobalElectronTRPC, ETRPCRequest, WireFormat } from '../types';
+import { observable, type Observer } from '@trpc/server/observable';
 import { transformResult } from './utils';
 import debugFactory from 'debug';
 
 const debug = debugFactory('electron-trpc:renderer:ipcLink');
+type IPCCallbacks = Observer<TRPCResponseMessage, TRPCClientError<AnyRouter>>;
+type IPCRequest = { callbacks: IPCCallbacks; finish: (notifyServer: boolean) => void };
 
-type IPCCallbackResult<TRouter extends AnyRouter = AnyRouter> = TRPCResponseMessage<
-  unknown,
-  inferRouterContext<TRouter>
->;
-
-type IPCCallbacks<TRouter extends AnyRouter = AnyRouter> = Observer<
-  IPCCallbackResult<TRouter>,
-  TRPCClientError<TRouter>
->;
-
-type IPCRequest = {
-  type: ProcedureType;
-  callbacks: IPCCallbacks;
-  op: Operation;
-};
+function clientError(cause: unknown) {
+  return TRPCClientError.from(
+    cause instanceof Error
+      ? cause
+      : new Error(typeof cause === 'string' ? cause : 'IPC transport failed')
+  );
+}
 
 const getElectronTRPC = () => {
-  const electronTRPC: RendererGlobalElectronTRPC = (globalThis as any).electronTRPC;
-
-  if (!electronTRPC) {
+  const bridge = (globalThis as typeof globalThis & { electronTRPC?: RendererGlobalElectronTRPC })
+    .electronTRPC;
+  if (!bridge)
     throw new Error(
       'Could not find `electronTRPC` global. Check that `exposeElectronTRPC` has been called in your preload file.'
     );
-  }
-
-  return electronTRPC;
+  return bridge;
 };
 
 let clientIdCounter = 0;
+// Client ids restart in every document, so they carry a per-document token: a late reply addressed to
+// a client of the previous document can then never be routed to a client of this one.
+const documentToken = Math.random().toString(36).slice(2, 8);
 
 export class MessageRouter {
   private static instance: MessageRouter | null = null;
   private clients = new Map<string, IPCClient>();
-  private electronTRPC: RendererGlobalElectronTRPC;
+  private electronTRPC = getElectronTRPC();
   private isInitialized = false;
+  private removeListener?: () => void;
 
-  private constructor() {
-    this.electronTRPC = getElectronTRPC();
-  }
+  private constructor() {}
 
   static getInstance(): MessageRouter {
-    if (!MessageRouter.instance) {
-      MessageRouter.instance = new MessageRouter();
-    }
-    return MessageRouter.instance;
+    return (MessageRouter.instance ??= new MessageRouter());
   }
 
   static reset(): void {
+    MessageRouter.instance?.removeListener?.();
+    MessageRouter.instance?.clients.clear();
     MessageRouter.instance = null;
   }
 
   registerClient(client: IPCClient): string {
-    const clientId = `c${++clientIdCounter}`;
-    this.clients.set(clientId, client);
-
     if (!this.isInitialized) {
-      this.electronTRPC.onMessage((response: TRPCResponseMessage) => {
-        this.routeResponse(response);
-      });
+      const remove = this.electronTRPC.onMessage((response) => this.routeResponse(response));
+      this.removeListener = typeof remove === 'function' ? remove : undefined;
       this.isInitialized = true;
-      debug('Global message handler initialized');
     }
-
-    debug('Client registered:', clientId);
-    return clientId;
+    const id = `c${++clientIdCounter}-${documentToken}`;
+    this.clients.set(id, client);
+    return id;
   }
 
   unregisterClient(clientId: string): void {
     this.clients.delete(clientId);
-    debug('Client unregistered:', clientId);
+    if (this.clients.size === 0 && this.removeListener) {
+      const remove = this.removeListener;
+      this.removeListener = undefined;
+      this.isInitialized = false;
+      remove();
+    }
   }
 
-  private routeResponse(response: TRPCResponseMessage): void {
-    if (!response.id) return;
-
+  private routeResponse(reply: TRPCResponseMessage | string): void {
+    let response: TRPCResponseMessage;
+    if (typeof reply === 'string') {
+      try {
+        response = JSON.parse(reply);
+      } catch (error) {
+        debug('Ignored undecodable reply', error);
+        return;
+      }
+    } else {
+      response = reply;
+    }
+    if (response.id == null) return;
     const compositeId = String(response.id);
-    const separatorIndex = compositeId.indexOf(':');
-
-    if (separatorIndex === -1) {
-      debug('Received non-composite ID, ignoring:', compositeId);
-      return;
-    }
-
-    const clientId = compositeId.substring(0, separatorIndex);
-    const originalIdStr = compositeId.substring(separatorIndex + 1);
-
-    const originalId = isNaN(Number(originalIdStr)) ? originalIdStr : Number(originalIdStr);
-
-    const client = this.clients.get(clientId);
-    if (client) {
-      const clientResponse = {
-        ...response,
-        id: originalId,
-      };
-      debug('Routing response to client:', clientId, 'originalId:', originalId);
-      client.handleResponse(clientResponse);
-    } else {
-      debug('Client not found for response:', clientId);
-    }
+    const separator = compositeId.indexOf(':');
+    if (separator < 0) return;
+    const id = Number(compositeId.slice(separator + 1));
+    this.clients.get(compositeId.slice(0, separator))?.handleResponse({ ...response, id });
   }
 
-  sendMessage(clientId: string, message: ETRPCRequest): void {
-    let modifiedMessage: ETRPCRequest;
-
-    if (message.method === 'request') {
-      const compositeId = `${clientId}:${message.operation.id}`;
-      modifiedMessage = {
-        ...message,
-        operation: {
-          ...message.operation,
-          id: compositeId as any,
-        },
-      };
-    } else {
-      const compositeId = `${clientId}:${message.id}`;
-      modifiedMessage = {
-        ...message,
-        id: compositeId as any,
-      };
-    }
-
-    debug('Sending message with composite ID:', modifiedMessage);
-    this.electronTRPC.sendMessage(modifiedMessage);
+  sendMessage(clientId: string, message: ETRPCRequest, wireFormat: WireFormat): void {
+    const wire: ETRPCRequest =
+      message.method === 'request'
+        ? {
+            method: 'request',
+            operation: {
+              id: `${clientId}:${message.operation.id}`,
+              path: message.operation.path,
+              type: message.operation.type,
+              input: message.operation.input,
+            },
+          }
+        : { method: 'subscription.stop', id: `${clientId}:${message.id}` };
+    this.electronTRPC.sendMessage(wireFormat === 'json' ? JSON.stringify(wire) : wire);
   }
 }
 
 class IPCClient {
-  #pendingRequests = new Map<string | number, IPCRequest>();
+  #pendingRequests = new Map<number, IPCRequest>();
   #messageRouter = MessageRouter.getInstance();
-  #clientId: string;
+  #clientId?: string;
 
-  constructor() {
-    this.#clientId = this.#messageRouter.registerClient(this);
-  }
+  constructor(private readonly wireFormat: WireFormat) {}
 
   handleResponse(response: TRPCResponseMessage) {
-    debug('handling response for client', this.#clientId, response);
-    const request = response.id && this.#pendingRequests.get(response.id);
-    if (!request) {
-      debug('no pending request found for id', response.id);
-      return;
-    }
-
+    if (typeof response.id !== 'number') return;
+    const request = this.#pendingRequests.get(response.id);
+    if (!request) return;
+    const stopped = 'result' in response && response.result.type === 'stopped';
+    if ('error' in response || stopped) request.finish(false);
     request.callbacks.next(response);
-
-    if ('result' in response && response.result.type === 'stopped') {
-      request.callbacks.complete();
-    }
+    if (stopped) request.callbacks.complete();
   }
 
   request(op: Operation, callbacks: IPCCallbacks) {
-    const { type, id } = op;
-
-    this.#pendingRequests.set(id, {
-      type,
-      callbacks,
-      op,
-    });
-
-    this.#messageRouter.sendMessage(this.#clientId, { method: 'request', operation: op });
-
-    return () => {
-      const callbacks = this.#pendingRequests.get(id)?.callbacks;
-
-      this.#pendingRequests.delete(id);
-
-      callbacks?.complete();
-
-      if (type === 'subscription') {
-        this.#messageRouter.sendMessage(this.#clientId, {
-          id,
-          method: 'subscription.stop',
-        });
+    const { id, type, signal } = op;
+    const finish = (notifyServer: boolean) => {
+      if (!this.#pendingRequests.delete(id)) return;
+      signal?.removeEventListener('abort', abort);
+      const clientId = this.#clientId;
+      try {
+        if (notifyServer && type === 'subscription' && clientId) {
+          this.#messageRouter.sendMessage(
+            clientId,
+            { method: 'subscription.stop', id },
+            this.wireFormat
+          );
+        }
+      } catch (error) {
+        debug('Could not stop subscription', error);
+      } finally {
+        if (this.#pendingRequests.size === 0 && clientId) {
+          this.#clientId = undefined;
+          this.#messageRouter.unregisterClient(clientId);
+        }
       }
     };
-  }
-
-  destroy() {
-    this.#messageRouter.unregisterClient(this.#clientId);
+    const abort = () => {
+      finish(true);
+      callbacks.error(
+        TRPCClientError.from(new DOMException('The operation was aborted', 'AbortError'))
+      );
+    };
+    if (signal?.aborted) {
+      abort();
+      return () => {};
+    }
+    try {
+      this.#clientId ??= this.#messageRouter.registerClient(this);
+      this.#pendingRequests.set(id, { callbacks, finish });
+      signal?.addEventListener('abort', abort, { once: true });
+      this.#messageRouter.sendMessage(
+        this.#clientId,
+        { method: 'request', operation: op },
+        this.wireFormat
+      );
+    } catch (error) {
+      finish(false);
+      callbacks.error(clientError(error));
+    }
+    return () => {
+      if (!this.#pendingRequests.has(id)) return;
+      finish(true);
+      callbacks.complete();
+    };
   }
 }
 
-export function ipcLink<TRouter extends AnyRouter>(): TRPCLink<TRouter> {
-  return (runtime: any) => {
-    const client = new IPCClient();
-
-    return ({ op }: any) => {
-      return observable((observer: any) => {
-        op.input = runtime.transformer.serialize(op.input);
-
-        const unsubscribe = client.request(op, {
-          error(err: any) {
-            observer.error(err as TRPCClientError<any>);
-            unsubscribe();
-          },
-          complete() {
-            observer.complete();
-          },
-          next(response: any) {
-            const transformed = transformResult(response, runtime);
-
-            if (!transformed.ok) {
-              observer.error(TRPCClientError.from(transformed.error));
-              return;
-            }
-
-            observer.next({ result: transformed.result });
-
-            if (op.type !== 'subscription') {
-              unsubscribe();
-              observer.complete();
+export function ipcLink<TRouter extends AnyRouter>({
+  transformer = { serialize: (value: unknown) => value, deserialize: (value: unknown) => value },
+  wireFormat = 'structured-clone',
+}: {
+  transformer?: DataTransformer | CombinedDataTransformer;
+  /**
+   * `'json'` sends requests and receives their replies as JSON text, which is much cheaper to move
+   * across the context bridge than large objects. Only JSON-compatible values survive, so pair it
+   * with a transformer such as superjson if you exchange dates, maps, or other rich types.
+   */
+  wireFormat?: WireFormat;
+} = {}): TRPCLink<TRouter> {
+  const { input, output } =
+    'input' in transformer ? transformer : { input: transformer, output: transformer };
+  return () => {
+    const client = new IPCClient(wireFormat);
+    return ({ op }) =>
+      observable((observer) => {
+        let operation: Operation;
+        try {
+          operation = { ...op, input: input.serialize(op.input) };
+        } catch (error) {
+          observer.error(clientError(error));
+          return;
+        }
+        return client.request(operation, {
+          error: (error) => observer.error(error),
+          complete: () => observer.complete(),
+          next(response) {
+            try {
+              const transformed = transformResult(response, output);
+              if (!transformed.ok) {
+                observer.error(TRPCClientError.from(transformed.error));
+                return;
+              }
+              observer.next({ result: transformed.result });
+              if (op.type !== 'subscription') observer.complete();
+            } catch (error) {
+              observer.error(clientError(error));
             }
           },
         });
-
-        return () => {
-          unsubscribe();
-        };
       });
-    };
   };
 }
