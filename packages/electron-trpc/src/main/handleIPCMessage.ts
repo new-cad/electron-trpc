@@ -1,9 +1,13 @@
-import { callProcedure, TRPCError } from '@trpc/server';
+import {
+  callTRPCProcedure,
+  getTRPCErrorShape,
+  transformTRPCResponse,
+  TRPCError,
+} from '@trpc/server';
 import type { AnyRouter, inferRouterContext } from '@trpc/server';
 import type { TRPCResponseMessage } from '@trpc/server/rpc';
 import type { IpcMainEvent } from 'electron';
 import { isObservable, Unsubscribable } from '@trpc/server/observable';
-import { transformTRPCResponse } from '@trpc/server/shared';
 import { getTRPCErrorFromUnknown } from './utils';
 import { CreateContextOptions } from './types';
 import { ELECTRON_TRPC_CHANNEL } from '../constants';
@@ -51,11 +55,13 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   };
 
   try {
-    const result = await callProcedure({
+    const result = await callTRPCProcedure({
       ctx,
       path,
-      procedures: router._def.procedures,
-      rawInput: input,
+      router,
+      signal: undefined,
+      batchIndex: 0,
+      getRawInput: async () => input,
       type,
     });
 
@@ -91,7 +97,8 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
         const error = getTRPCErrorFromUnknown(err);
         respond({
           id,
-          error: router.getErrorShape({
+          error: getTRPCErrorShape({
+            config: router._def._config,
             error,
             type,
             path,
@@ -117,7 +124,8 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
 
     return respond({
       id,
-      error: router.getErrorShape({
+      error: getTRPCErrorShape({
+        config: router._def._config,
         error,
         type,
         path,

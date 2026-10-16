@@ -244,8 +244,7 @@ describe('ipcLink', () => {
 
   test('serializes inputs/outputs', async () => {
     const client = createTRPCProxyClient<Router>({
-      transformer: superjson as any,
-      links: [ipcLink()],
+      links: [ipcLink({ transformer: superjson })],
     });
 
     const mock = vi.mocked(electronTRPC);

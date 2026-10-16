@@ -1,5 +1,11 @@
 import { Operation, TRPCClientError, TRPCLink } from '@trpc/client';
-import type { AnyRouter, inferRouterContext, ProcedureType } from '@trpc/server';
+import type {
+  AnyRouter,
+  CombinedDataTransformer,
+  DataTransformer,
+  inferRouterContext,
+  ProcedureType,
+} from '@trpc/server';
 import type { TRPCResponseMessage } from '@trpc/server/rpc';
 import type { RendererGlobalElectronTRPC, ETRPCRequest } from '../types';
 import { observable, Observer } from '@trpc/server/observable';
@@ -190,24 +196,30 @@ class IPCClient {
   }
 }
 
-export function ipcLink<TRouter extends AnyRouter>(): TRPCLink<TRouter> {
-  return (runtime: any) => {
+export function ipcLink<TRouter extends AnyRouter>({
+  transformer = {
+    serialize: (value: unknown) => value,
+    deserialize: (value: unknown) => value,
+  },
+}: { transformer?: DataTransformer | CombinedDataTransformer } = {}): TRPCLink<TRouter> {
+  const { input, output } =
+    'input' in transformer ? transformer : { input: transformer, output: transformer };
+  return () => {
     const client = new IPCClient();
 
-    return ({ op }: any) => {
-      return observable((observer: any) => {
-        op.input = runtime.transformer.serialize(op.input);
-
-        const unsubscribe = client.request(op, {
-          error(err: any) {
-            observer.error(err as TRPCClientError<any>);
+    return ({ op }) => {
+      return observable((observer) => {
+        const operation = { ...op, input: input.serialize(op.input) };
+        const unsubscribe = client.request(operation, {
+          error(err) {
+            observer.error(err);
             unsubscribe();
           },
           complete() {
             observer.complete();
           },
-          next(response: any) {
-            const transformed = transformResult(response, runtime);
+          next(response) {
+            const transformed = transformResult(response, output);
 
             if (!transformed.ok) {
               observer.error(TRPCClientError.from(transformed.error));

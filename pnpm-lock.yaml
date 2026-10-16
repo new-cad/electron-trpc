@@ -31,17 +31,20 @@ importers:
         specifier: ^5.77.2
         version: 5.77.2(react@18.3.1)
       '@trpc/client':
-        specifier: 10.45.2
-        version: 10.45.2(@trpc/server@10.45.2)
+        specifier: 11.19.0
+        version: 11.19.0(@trpc/server@11.19.0(typescript@5.8.3))(typescript@5.8.3)
       '@trpc/server':
-        specifier: 10.45.2
-        version: 10.45.2
+        specifier: 11.19.0
+        version: 11.19.0(typescript@5.8.3)
       '@types/debug':
         specifier: ^4.1.12
         version: 4.1.12
       '@types/node':
         specifier: ^20.17.52
         version: 20.17.52
+      '@types/ws':
+        specifier: 8.2.0
+        version: 8.2.0
       '@vitest/coverage-v8':
         specifier: ^1.6.1
         version: 1.6.1(vitest@1.6.1(@types/node@20.17.52))
@@ -472,13 +475,18 @@ packages:
     peerDependencies:
       react: ^18 || ^19
 
-  '@trpc/client@10.45.2':
-    resolution: {integrity: sha512-ykALM5kYWTLn1zYuUOZ2cPWlVfrXhc18HzBDyRhoPYN0jey4iQHEFSEowfnhg1RvYnrAVjNBgHNeSAXjrDbGwg==}
+  '@trpc/client@11.19.0':
+    resolution: {integrity: sha512-0MKkPq6MejsKB5Opca1Rl22KVIaqo2+A1EiXyZ8EGUsl9TLrPdpGn+Usux20TZKFwnSC2+wI/WilqNJaP4ODfw==}
+    hasBin: true
     peerDependencies:
-      '@trpc/server': 10.45.2
+      '@trpc/server': 11.19.0
+      typescript: '>=5.7.2'
 
-  '@trpc/server@10.45.2':
-    resolution: {integrity: sha512-wOrSThNNE4HUnuhJG6PfDRp4L2009KDVxsd+2VYH8ro6o/7/jwYZ8Uu5j+VaW+mOmc8EHerHzGcdbGNQSAUPgg==}
+  '@trpc/server@11.19.0':
+    resolution: {integrity: sha512-7C1goiDurz82yFKtZUbEzjXd0Rg/jyisaIZQhdvus+1l7E6mwcEYZXjZ1US/HF8kOyz1LERL8UN3bcboJtjcyQ==}
+    hasBin: true
+    peerDependencies:
+      typescript: '>=5.7.2'
 
   '@types/cacheable-request@6.0.3':
     resolution: {integrity: sha512-IQ3EbTzGxIigb1I3qPZc1rWJnH0BmSKv5QYTalEwweFvyBDLSAe24zP0le/hyi7ecGfZVlIVAg4BZqb8WBwKqw==}
@@ -506,6 +514,9 @@ packages:
 
   '@types/responselike@1.0.3':
     resolution: {integrity: sha512-H/+L+UkTV33uf49PH5pCAUBVPNj2nDBXTN+qS1dOwyyg24l3CcicicCA7ca+HMvJBZcFgl5r8e+RR6elsb4Lyw==}
+
+  '@types/ws@8.2.0':
+    resolution: {integrity: sha512-cyeefcUCgJlEk+hk2h3N+MqKKsPViQgF5boi9TTHSK+PoR9KWBb/C5ccPcDyAqgsbAYHTwulch725DV84+pSpg==}
 
   '@types/yauzl@2.10.3':
     resolution: {integrity: sha512-oJoftv0LSuaDZE3Le4DbKX+KS9G36NzOeSap90UIK0yMA/NhKJhqlSGtNDORNRaIbQfzjXDrQa0ytJ6mNRGz/Q==}
@@ -1878,11 +1889,14 @@ snapshots:
       '@tanstack/query-core': 5.77.2
       react: 18.3.1
 
-  '@trpc/client@10.45.2(@trpc/server@10.45.2)':
+  '@trpc/client@11.19.0(@trpc/server@11.19.0(typescript@5.8.3))(typescript@5.8.3)':
     dependencies:
-      '@trpc/server': 10.45.2
+      '@trpc/server': 11.19.0(typescript@5.8.3)
+      typescript: 5.8.3
 
-  '@trpc/server@10.45.2': {}
+  '@trpc/server@11.19.0(typescript@5.8.3)':
+    dependencies:
+      typescript: 5.8.3
 
   '@types/cacheable-request@6.0.3':
     dependencies:
@@ -1912,6 +1926,10 @@ snapshots:
       undici-types: 6.19.8
 
   '@types/responselike@1.0.3':
+    dependencies:
+      '@types/node': 20.17.52
+
+  '@types/ws@8.2.0':
     dependencies:
       '@types/node': 20.17.52
 

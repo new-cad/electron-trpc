@@ -49,10 +49,11 @@
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.77.2",
-    "@trpc/client": "10.45.2",
-    "@trpc/server": "10.45.2",
+    "@trpc/client": "11.19.0",
+    "@trpc/server": "11.19.0",
     "@types/debug": "^4.1.12",
     "@types/node": "^20.17.52",
+    "@types/ws": "8.2.0",
     "@vitest/coverage-v8": "^1.6.1",
     "builtin-modules": "^4.0.0",
     "dts-bundle-generator": "9.5.1",
@@ -66,8 +67,8 @@
     "zod": "^3.25.32"
   },
   "peerDependencies": {
-    "@trpc/client": ">10.0.0",
-    "@trpc/server": ">10.0.0",
+    "@trpc/client": "^11.19.0",
+    "@trpc/server": "^11.19.0",
     "electron": ">19.0.0"
   },
   "dependencies": {

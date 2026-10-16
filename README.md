@@ -9,6 +9,8 @@
 - Secure alternative to opening servers on localhost.
 - Full support for queries, mutations, and subscriptions.
 
+Requires matching `@trpc/client` and `@trpc/server` versions 11.19.0 or later in the v11 series.
+
 ## Installation
 
 ```sh
@@ -67,3 +69,22 @@ npm install --save @new-cad/electron-trpc
    ```
 
 4. Now you can use the client in your render process as you normally would (e.g. using `@trpc/react`).
+
+## Data transformers
+
+With tRPC v11, configure the transformer on the IPC link rather than on the client:
+
+```ts
+import { createTRPCClient } from '@trpc/client';
+import { ipcLink } from '@new-cad/electron-trpc/renderer';
+import superjson from 'superjson';
+import type { AppRouter } from './api';
+
+export const client = createTRPCClient<AppRouter>({
+  links: [ipcLink({ transformer: superjson })],
+});
+```
+
+Configure the same transformer on `initTRPC.create({ transformer: superjson })` in the main process.
+Separate input and output transformers are also supported through `{ transformer: { input, output } }`.
+For routers without a transformer, continue using `ipcLink()`.
