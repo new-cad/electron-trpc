@@ -1,118 +1,165 @@
 import type { AnyRouter, inferRouterContext } from '@trpc/server';
-import { ipcMain } from 'electron';
-import type { BrowserWindow, IpcMainEvent } from 'electron';
-import { handleIPCMessage } from './handleIPCMessage';
-import { CreateContextOptions } from './types';
-import { ELECTRON_TRPC_CHANNEL } from '../constants';
-import { ETRPCRequest } from '../types';
-import { Unsubscribable } from '@trpc/server/observable';
+import type { Unsubscribable } from '@trpc/server/observable';
 import debugFactory from 'debug';
+import { ipcMain, type BrowserWindow, type IpcMainEvent, type WebContents } from 'electron';
+import { ELECTRON_TRPC_CHANNEL } from '../constants';
+import type { ETRPCRequest } from '../types';
+import { handleIPCMessage } from './handleIPCMessage';
+import type { CreateContextOptions } from './types';
 
 const debug = debugFactory('electron-trpc:main:IPCHandler');
 
-type Awaitable<T> = T | Promise<T>;
-
-const getInternalId = (event: IpcMainEvent, request: ETRPCRequest) => {
-  const messageId = request.method === 'request' ? request.operation.id : request.id;
-  return `${event.sender.id}-${event.senderFrame.routingId}:${messageId}`;
+type HandlerOptions<TRouter extends AnyRouter> = {
+  router: TRouter;
+  createContext?: (
+    opts: CreateContextOptions
+  ) => inferRouterContext<TRouter> | Promise<inferRouterContext<TRouter>>;
+  windows?: BrowserWindow[];
+  validateSender?: (event: IpcMainEvent) => boolean;
 };
 
+type AttachedWindow = {
+  contents: WebContents;
+  id: number;
+  generation: number;
+  removeListeners: () => void;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRequestId(value: unknown) {
+  return (
+    (typeof value === 'string' && value.length > 0) ||
+    (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+
+function isIPCRequest(value: unknown): value is ETRPCRequest {
+  if (!isRecord(value)) return false;
+  if (value.method === 'subscription.stop') return isRequestId(value.id);
+  if (value.method !== 'request' || !isRecord(value.operation)) return false;
+  const { id, path, type } = value.operation;
+  return (
+    isRequestId(id) &&
+    typeof path === 'string' &&
+    path.length > 0 &&
+    (type === 'query' || type === 'mutation' || type === 'subscription')
+  );
+}
+
 class IPCHandler<TRouter extends AnyRouter> {
-  #windows: BrowserWindow[] = [];
-  #subscriptions: Map<string, Unsubscribable> = new Map();
+  #windows = new Map<BrowserWindow, AttachedWindow>();
+  #senders = new Map<WebContents, AttachedWindow>();
+  #subscriptions = new Map<string, Unsubscribable>();
+  #disposed = false;
+  #onMessage: (event: IpcMainEvent, request: unknown) => void;
 
-  constructor({
-    createContext,
-    router,
-    windows = [],
-  }: {
-    createContext?: (opts: CreateContextOptions) => Awaitable<inferRouterContext<TRouter>>;
-    router: TRouter;
-    windows?: BrowserWindow[];
-  }) {
-    windows.forEach((win) => this.attachWindow(win));
-
-    ipcMain.on(ELECTRON_TRPC_CHANNEL, (event: IpcMainEvent, request: ETRPCRequest) => {
-      handleIPCMessage({
+  constructor({ createContext, router, windows = [], validateSender }: HandlerOptions<TRouter>) {
+    this.#onMessage = (event, request) => {
+      const attached = this.#senders.get(event.sender);
+      if (
+        !attached ||
+        event.sender.isDestroyed() ||
+        !event.senderFrame ||
+        event.senderFrame !== event.sender.mainFrame ||
+        !isIPCRequest(request)
+      ) {
+        return;
+      }
+      try {
+        if (validateSender && validateSender(event) !== true) return;
+      } catch (error) {
+        debug('Sender validation failed', error);
+        return;
+      }
+      const generation = attached.generation;
+      const messageId = request.method === 'request' ? request.operation.id : request.id;
+      void handleIPCMessage({
         router,
         createContext,
-        internalId: getInternalId(event, request),
         event,
         message: request,
+        internalId: `${event.sender.id}:${event.senderFrame.routingId}:${messageId}`,
         subscriptions: this.#subscriptions,
-      });
-    });
+        isActive: () =>
+          this.#senders.get(event.sender) === attached &&
+          generation === attached.generation &&
+          !event.sender.isDestroyed(),
+      }).catch((error: unknown) => debug('IPC request failed', error));
+    };
+    try {
+      windows.forEach((win) => this.attachWindow(win));
+    } catch (error) {
+      this.dispose();
+      throw error;
+    }
+    ipcMain.on(ELECTRON_TRPC_CHANNEL, this.#onMessage);
   }
 
   attachWindow(win: BrowserWindow) {
-    if (this.#windows.includes(win)) {
-      return;
-    }
-
-    debug('Attaching window', win.id);
-
-    this.#windows.push(win);
-    this.#attachSubscriptionCleanupHandlers(win);
+    if (this.#disposed) throw new Error('Cannot attach a window to a disposed IPC handler');
+    if (this.#windows.has(win)) return;
+    if (win.isDestroyed() || win.webContents.isDestroyed())
+      throw new Error('Cannot attach a destroyed window');
+    const contents = win.webContents;
+    const attached: AttachedWindow = {
+      contents,
+      id: contents.id,
+      generation: 0,
+      removeListeners: () => {
+        contents.removeListener('did-start-navigation', onNavigation);
+        contents.removeListener('destroyed', onDestroyed);
+        contents.removeListener('render-process-gone', onProcessGone);
+      },
+    };
+    const invalidate = () => {
+      attached.generation++;
+      this.#cleanUpSubscriptions(attached.id);
+    };
+    const onNavigation = (
+      details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>
+    ) => {
+      if (details.isMainFrame && !details.isSameDocument) invalidate();
+    };
+    const onDestroyed = () => this.detachWindow(win);
+    const onProcessGone = () => invalidate();
+    this.#windows.set(win, attached);
+    this.#senders.set(contents, attached);
+    contents.on('did-start-navigation', onNavigation);
+    contents.on('destroyed', onDestroyed);
+    contents.on('render-process-gone', onProcessGone);
   }
 
   detachWindow(win: BrowserWindow, webContentsId?: number) {
-    debug('Detaching window', win.id);
-
-    if (win.isDestroyed() && webContentsId === undefined) {
-      throw new Error('webContentsId is required when calling detachWindow on a destroyed window');
+    const attached = this.#windows.get(win);
+    if (!attached) return;
+    if (webContentsId !== undefined && attached.id !== webContentsId) {
+      throw new Error('webContentsId does not match the attached window');
     }
-
-    this.#windows = this.#windows.filter((w) => w !== win);
-    this.#cleanUpSubscriptions({ webContentsId: webContentsId ?? win.webContents.id });
+    this.#windows.delete(win);
+    this.#senders.delete(attached.contents);
+    attached.removeListeners();
+    this.#cleanUpSubscriptions(attached.id);
   }
 
-  #cleanUpSubscriptions({
-    webContentsId,
-    frameRoutingId,
-  }: {
-    webContentsId: number;
-    frameRoutingId?: number;
-  }) {
-    for (const [key, sub] of this.#subscriptions.entries()) {
-      if (key.startsWith(`${webContentsId}-${frameRoutingId ?? ''}`)) {
-        debug('Closing subscription', key);
-        sub.unsubscribe();
+  #cleanUpSubscriptions(webContentsId: number) {
+    for (const [key, subscription] of this.#subscriptions) {
+      if (key.startsWith(`${webContentsId}:`)) {
         this.#subscriptions.delete(key);
+        subscription.unsubscribe();
       }
     }
   }
 
-  #attachSubscriptionCleanupHandlers(win: BrowserWindow) {
-    const webContentsId = win.webContents.id;
-    win.webContents.on('did-start-navigation', ({ isSameDocument, frame }) => {
-      // Check if it's a hard navigation
-      if (!isSameDocument) {
-        debug(
-          'Handling hard navigation event',
-          `webContentsId: ${webContentsId}`,
-          `frameRoutingId: ${frame.routingId}`
-        );
-        this.#cleanUpSubscriptions({
-          webContentsId: webContentsId,
-          frameRoutingId: frame.routingId,
-        });
-      }
-    });
-    win.webContents.on('destroyed', () => {
-      debug('Handling webContents `destroyed` event');
-      this.detachWindow(win, webContentsId);
-    });
+  dispose() {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    ipcMain.removeListener(ELECTRON_TRPC_CHANNEL, this.#onMessage);
+    for (const win of this.#windows.keys()) this.detachWindow(win);
   }
 }
 
-export const createIPCHandler = <TRouter extends AnyRouter>({
-  createContext,
-  router,
-  windows = [],
-}: {
-  createContext?: (opts: CreateContextOptions) => Promise<inferRouterContext<TRouter>>;
-  router: TRouter;
-  windows?: Electron.BrowserWindow[];
-}) => {
-  return new IPCHandler({ createContext, router, windows });
-};
+export const createIPCHandler = <TRouter extends AnyRouter>(options: HandlerOptions<TRouter>) =>
+  new IPCHandler(options);

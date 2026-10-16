@@ -2,18 +2,18 @@
 import path from 'path';
 import { defineConfig } from 'vite';
 
-module.exports = defineConfig({
+export default defineConfig({
   base: './',
   build: {
     lib: {
-      entry: path.resolve(__dirname, './index.ts'),
+      entry: path.resolve(import.meta.dirname, './index.ts'),
       name: 'electron-trpc',
       formats: ['es', 'cjs'],
       fileName: (format) => ({ es: 'main.mjs', cjs: 'main.cjs' })[format as 'es' | 'cjs'],
     },
-    outDir: path.resolve(__dirname, '../../dist'),
-    rollupOptions: {
-      external: ['electron'],
+    outDir: path.resolve(import.meta.dirname, '../../dist'),
+    rolldownOptions: {
+      external: ['electron', /^@trpc\//, 'debug'],
     },
   },
 });
