@@ -1,5 +1,23 @@
 # electron-trpc
 
+## 0.8.0
+
+### Minor Changes
+
+- [#3](https://github.com/new-cad/electron-trpc/pull/3) [`7c36955`](https://github.com/new-cad/electron-trpc/commit/7c369558fe1f835acf8d3e8e77e485fe17f52d51) Thanks [@Snootic](https://github.com/Snootic)! - Restrict IPC requests to attached windows' main frames, validate request envelopes, and support a synchronous trusted-document policy through `validateSender`. Empty window lists now deny all senders, so every `BrowserWindow` that calls the router must be listed or attached (content hosted in a `WebContentsView` or `<webview>` cannot be attached yet); rejected requests get no reply and are logged under the `electron-trpc:main:IPCHandler` debug namespace. Add explicit handler disposal and revoke subscriptions on main-frame document replacement (committed navigation or error page), destruction, crashes, and detachment. Renderer client ids now carry a per-document token.
+
+  Fix pending-subscription cancellation races, duplicate subscription cleanup, synchronous stream termination, context/transformer errors (undecodable input is reported as `PARSE_ERROR`), and falsy input handling. Release idle renderer clients and removable preload listeners, handle AbortSignal locally, and omit signals from serialized requests. Update the preload with the renderer to enable listener removal. `createContext` is typed with the `IpcMainEvent` it actually receives. `attachWindow` now throws for destroyed windows, and `detachWindow` ignores windows that are not attached and only needs `webContentsId` as an optional consistency check.
+
+  Require Electron 42 or newer, update development dependencies and CI, and keep tRPC/debug external to avoid duplicated runtime state. Applications remain responsible for trusted navigation, router authorization, and operation limits.
+
+- [#3](https://github.com/new-cad/electron-trpc/pull/3) [`020a2bd`](https://github.com/new-cad/electron-trpc/commit/020a2bd80aeb3909da6f74a7a4bd1ba3faac04c3) Thanks [@Snootic](https://github.com/Snootic)! - Add an opt-in `wireFormat: 'json'` option to `ipcLink` that exchanges messages as JSON text instead of objects. Results made of many objects cross the context bridge several times faster; small calls are unchanged, and a single large string or buffer is slower, so the default stays `'structured-clone'`. The main process replies in the format each request used, and decodes text only after the attached-window and main-frame checks. Custom `electronTRPC` bridges must forward strings unchanged.
+
+  Build data replies directly instead of through tRPC's response helper, which lowers main-process CPU for high-frequency subscriptions.
+
+- [#2](https://github.com/new-cad/electron-trpc/pull/2) [`51af3a4`](https://github.com/new-cad/electron-trpc/commit/51af3a49cabaa293c50788097562924852e26843) Thanks [@Snootic](https://github.com/Snootic)! - Migrate the IPC transport to tRPC v11. This release requires matching tRPC client and server versions in the `^11.19.0` range.
+
+  Configure custom serialization on `ipcLink({ transformer })` instead of the tRPC client. The link supports separate input/output transformers and leaves operations from preceding links unchanged. Routers without a custom transformer can continue using `ipcLink()`. Subscriptions must return an `observable()`; tRPC v11 async-generator subscriptions are not supported over IPC.
+
 ## 0.7.2
 
 ### Patch Changes
