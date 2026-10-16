@@ -31,7 +31,8 @@ function connect<TRouter extends AnyRouter>(
     onMessage: (handler) => {
       receive = handler;
     },
-    sendMessage: (message: ETRPCRequest) => {
+    sendMessage: (payload) => {
+      const message = payload as ETRPCRequest;
       const id = message.method === 'request' ? message.operation.id : message.id;
       void handleIPCMessage({ router, event, message, internalId: String(id), subscriptions });
     },
@@ -101,6 +102,7 @@ describe('tRPC v11 IPC transport', () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(subscriptions.size).toBe(0);
   });
+
   test('round-trips transformed queries and mutations without changing preceding link operations', async () => {
     const t = initTRPC.create({ transformer: superjson });
     const input = z.object({ date: z.date(), count: z.bigint() });

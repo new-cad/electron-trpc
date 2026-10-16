@@ -76,21 +76,45 @@ app
         await run("window.transport.date(new Date('2026-01-01T00:00:00Z'))"),
         '2026-01-01T00:00:00.000Z'
       );
+      assert.equal(
+        await run("window.transport.json.date(new Date('2026-01-01T00:00:00Z'))"),
+        '2026-01-01T00:00:00.000Z',
+        'A Date must survive the json wire format through superjson'
+      );
+      // Replies follow the format of their request, so a json link never receives objects.
+      assert.deepEqual(
+        await run('window.transport.replyKinds(() => window.transport.json.date(new Date()))'),
+        ['string']
+      );
+      assert.deepEqual(
+        await run('window.transport.replyKinds(() => window.transport.date(new Date()))'),
+        ['object']
+      );
+      await run('window.transport.json.start()');
+      await waitFor(() => streams === 1);
+      await run('window.transport.json.stop(); window.transport.json.stop(); true');
+      await waitFor(() => streams === 0);
       const raw =
-        "window.electronTRPC.sendMessage({method:'request',operation:{id:'untrusted:1',type:'query',path:'read',context:{}}}); true";
+        "window.electronTRPC.sendMessage({method:'request',operation:{id:'untrusted:1',type:'query',path:'read'}}); true";
+      const rawText =
+        "window.electronTRPC.sendMessage(JSON.stringify({method:'request',operation:{id:'untrusted:2',type:'query',path:'read'}})); true";
       const child = attached.webContents.mainFrame.frames[0];
       assert(child, 'Test iframe must exist');
       let arrived = 0;
       const countArrivals = () => arrived++;
       ipcMain.on(ELECTRON_TRPC_CHANNEL, countArrivals);
       await child.executeJavaScript(raw);
+      await child.executeJavaScript(rawText);
       await other.webContents.executeJavaScript(raw);
+      await run("window.electronTRPC.sendMessage('{not json'); true");
       allow = false;
       await run(raw);
+      await run(rawText);
       await run('window.electronTRPC.sendMessage(null); true');
-      // Wait until all four rejected messages (subframe, unattached window, policy, malformed) have
-      // reached the main process, so the assertion below cannot pass just because they are in flight.
-      await waitFor(() => arrived >= 4);
+      // Wait until all seven rejected messages (subframe, unattached window, undecodable text, policy,
+      // malformed) have reached the main process, so the assertion below cannot pass just because
+      // they are in flight.
+      await waitFor(() => arrived >= 7);
       ipcMain.removeListener(ELECTRON_TRPC_CHANNEL, countArrivals);
       await sleep(0); // let any wrongly accepted request run its promise chain before asserting
       assert.equal(calls, 1, 'Unauthorized and malformed requests must never execute');
@@ -98,19 +122,13 @@ app
       await run('window.transport.start()');
       await waitFor(() => streams === 1);
       // A navigation that never replaces the document (blocked in will-navigate) must not revoke it.
-      const blocked = new Promise((resolve) =>
-        attached.webContents.once('will-navigate', (event) => {
-          event.preventDefault();
-          resolve();
-        })
-      );
+      let blocked = false;
+      attached.webContents.once('will-navigate', (event) => {
+        event.preventDefault();
+        blocked = true;
+      });
       await run("location.assign('https://example.invalid/'); true");
-      await Promise.race([
-        blocked,
-        sleep(5_000).then(() => {
-          throw new Error('will-navigate did not fire for the blocked navigation');
-        }),
-      ]);
+      await waitFor(() => blocked);
       assert.equal(await run('window.transport.read()'), 'ok');
       assert.equal(calls, 2);
       assert.equal(streams, 1, 'A blocked navigation must not cancel the live subscription');
@@ -124,12 +142,7 @@ app
       await waitFor(() => streams === 0);
       // Work started by a replacement document while it loads must survive that document's commit.
       await attached.loadFile(path.join(output, 'index.html'), { query: { autostart: '1' } });
-      assert.equal(
-        await run(
-          "Promise.race([window.autoRead, new Promise((r) => setTimeout(() => r('timed out'), 3000))])"
-        ),
-        'ok'
-      );
+      assert.equal(await run('window.autoRead'), 'ok');
       await waitFor(() => streams === 1);
       await sleep(100); // a late revocation by the document's own did-navigate would land here
       assert.equal(streams, 1, 'A subscription started at load must survive the navigation commit');

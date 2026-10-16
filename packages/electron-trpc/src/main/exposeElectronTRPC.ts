@@ -4,7 +4,7 @@ import type { RendererGlobalElectronTRPC } from '../types';
 
 export const exposeElectronTRPC = () => {
   const electronTRPC: RendererGlobalElectronTRPC = {
-    sendMessage: (operation) => ipcRenderer.send(ELECTRON_TRPC_CHANNEL, operation),
+    sendMessage: (message) => ipcRenderer.send(ELECTRON_TRPC_CHANNEL, message),
     onMessage: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, args: Parameters<typeof callback>[0]) =>
         callback(args);

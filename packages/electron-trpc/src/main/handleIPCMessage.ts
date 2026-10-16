@@ -11,10 +11,14 @@ import type { IpcMainEvent } from 'electron';
 import { isObservable, type Unsubscribable } from '@trpc/server/observable';
 import type { CreateContextOptions } from './types';
 import { ELECTRON_TRPC_CHANNEL } from '../constants';
-import type { ETRPCRequest } from '../types';
+import type { ETRPCRequest, WireFormat } from '../types';
 import debugFactory from 'debug';
 
 const debug = debugFactory('electron-trpc:main:handleIPCMessage');
+
+export type ContextFactory<TRouter extends AnyRouter> = (
+  opts: CreateContextOptions
+) => inferRouterContext<TRouter> | Promise<inferRouterContext<TRouter>>;
 
 export async function handleIPCMessage<TRouter extends AnyRouter>({
   router,
@@ -24,17 +28,18 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   event,
   subscriptions,
   isAuthorized = () => true,
+  wireFormat = 'structured-clone',
 }: {
   router: TRouter;
-  createContext?: (
-    opts: CreateContextOptions
-  ) => inferRouterContext<TRouter> | Promise<inferRouterContext<TRouter>>;
+  createContext?: ContextFactory<TRouter>;
   internalId: string;
   message: ETRPCRequest;
   event: IpcMainEvent;
   subscriptions: Map<string, Unsubscribable>;
   /** Whether the sender is still attached to the document this request arrived from. */
   isAuthorized?: () => boolean;
+  /** Replies are sent as JSON text when the request arrived as JSON text. */
+  wireFormat?: WireFormat;
 }) {
   if (message.method === 'subscription.stop') {
     const subscription = subscriptions.get(internalId);
@@ -44,6 +49,7 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   }
 
   const { type, input: serializedInput, path, id } = message.operation;
+  const config = router._def._config;
   let input: unknown;
   let ctx: inferRouterContext<TRouter> | undefined;
   let active = true;
@@ -63,18 +69,32 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
 
   const cancelled = () => !active || !isAuthorized() || event.sender.isDestroyed();
   const respond = (response: TRPCResponseMessage) => {
+    // Checked before any transformer runs, so none runs for a sender that has lost access.
     if (cancelled()) {
       finish();
       return;
     }
-    event.reply(ELECTRON_TRPC_CHANNEL, transformTRPCResponse(router._def._config, response));
+    // Data replies carry every result and subscription event, so they skip the object spreads in
+    // transformTRPCResponse. Its data branch is the source of truth; handleIPCMessage.test.ts pins
+    // that the output is identical, so re-run it when upgrading tRPC.
+    const reply =
+      'result' in response && response.result.type === 'data'
+        ? {
+            id: response.id,
+            result: {
+              type: 'data',
+              data: config.transformer.output.serialize(response.result.data),
+            },
+          }
+        : transformTRPCResponse(config, response);
+    event.reply(ELECTRON_TRPC_CHANNEL, wireFormat === 'json' ? JSON.stringify(reply) : reply);
   };
   const fail = (cause: unknown) => {
     try {
       respond({
         id,
         error: getTRPCErrorShape({
-          config: router._def._config,
+          config,
           error: getTRPCErrorFromUnknown(cause),
           type,
           path,
@@ -104,7 +124,7 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   try {
     if (serializedInput !== undefined) {
       try {
-        input = router._def._config.transformer.input.deserialize(serializedInput);
+        input = config.transformer.input.deserialize(serializedInput);
       } catch (cause) {
         throw new TRPCError({ code: 'PARSE_ERROR', cause });
       }

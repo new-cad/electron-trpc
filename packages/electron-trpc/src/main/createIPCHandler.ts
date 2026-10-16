@@ -1,19 +1,16 @@
-import type { AnyRouter, inferRouterContext } from '@trpc/server';
+import type { AnyRouter } from '@trpc/server';
 import type { Unsubscribable } from '@trpc/server/observable';
 import debugFactory from 'debug';
 import { ipcMain, type BrowserWindow, type IpcMainEvent, type WebContents } from 'electron';
 import { ELECTRON_TRPC_CHANNEL } from '../constants';
 import type { ETRPCRequest } from '../types';
-import { handleIPCMessage } from './handleIPCMessage';
-import type { CreateContextOptions } from './types';
+import { handleIPCMessage, type ContextFactory } from './handleIPCMessage';
 
 const debug = debugFactory('electron-trpc:main:IPCHandler');
 
 type HandlerOptions<TRouter extends AnyRouter> = {
   router: TRouter;
-  createContext?: (
-    opts: CreateContextOptions
-  ) => inferRouterContext<TRouter> | Promise<inferRouterContext<TRouter>>;
+  createContext?: ContextFactory<TRouter>;
   windows?: BrowserWindow[];
   validateSender?: (event: IpcMainEvent) => boolean;
 };
@@ -26,10 +23,7 @@ type AttachedWindow = {
   // arrived under; queries and mutations have no `subscriptions` entry, so this is what stops them
   // from replying into a replacement document.
   generation: number;
-  // Process and routing id of the current document's main frame. Every document gets its own, so a
-  // changed id without `did-navigate` means a failed load put Chromium's error page in its place.
-  // (`contents.mainFrame` can return the same object for the replacement, so objects are not
-  // compared.) Unreadable while the renderer is gone.
+  // `processId:routingId` of the current document's main frame; undefined while unreadable.
   frame: string | undefined;
   removeListeners: () => void;
 };
@@ -45,7 +39,7 @@ function mainFrameId(contents: WebContents) {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null;
 }
 
 function isRequestId(value: unknown) {
@@ -73,22 +67,41 @@ class IPCHandler<TRouter extends AnyRouter> {
   #senders = new Map<WebContents, AttachedWindow>();
   #subscriptions = new Map<string, Unsubscribable>();
   #disposed = false;
-  #onMessage: (event: IpcMainEvent, request: unknown) => void;
+  #onMessage: (event: IpcMainEvent, payload: unknown) => void;
 
   constructor({ createContext, router, windows = [], validateSender }: HandlerOptions<TRouter>) {
     // Rejected requests get no reply, so every early return below is logged for diagnosis.
-    this.#onMessage = (event, request) => {
+    this.#onMessage = (event, payload) => {
       const attached = this.#senders.get(event.sender);
       if (!attached) {
         debug('Ignored IPC message from a webContents that is not an attached window');
         return;
       }
       const frame = event.senderFrame;
-      if (event.sender.isDestroyed() || !frame || frame !== event.sender.mainFrame) {
+      // `senderFrame` resolves lazily, so the ids recorded at send time must also name the current
+      // main frame: a document that has since been replaced cannot pass as its replacement.
+      if (
+        event.sender.isDestroyed() ||
+        !frame ||
+        frame !== event.sender.mainFrame ||
+        event.processId !== frame.processId ||
+        event.frameId !== frame.routingId
+      ) {
         debug(
           'Ignored IPC message from a destroyed webContents or a frame other than the main frame'
         );
         return;
+      }
+      // A link using the `json` wire format sends text and gets its replies as text too.
+      const json = typeof payload === 'string';
+      let request: unknown = payload;
+      if (json) {
+        try {
+          request = JSON.parse(payload);
+        } catch {
+          debug('Ignored undecodable IPC message');
+          return;
+        }
       }
       if (!isIPCRequest(request)) {
         debug('Ignored malformed IPC message');
@@ -103,8 +116,8 @@ class IPCHandler<TRouter extends AnyRouter> {
         debug('Sender validation failed', error);
         return;
       }
-      // A document's commit is handled before its first IPC message, so a replacement document's
-      // requests are accepted under the new generation. The Electron smoke test pins this.
+      // A document's commit is handled before its first message, so a replacement document's requests
+      // arrive under the new generation (the Electron smoke test pins this).
       const generation = attached.generation;
       const messageId = request.method === 'request' ? request.operation.id : request.id;
       void handleIPCMessage({
@@ -112,6 +125,7 @@ class IPCHandler<TRouter extends AnyRouter> {
         createContext,
         event,
         message: request,
+        wireFormat: json ? 'json' : 'structured-clone',
         internalId: `${event.sender.id}:${frame.routingId}:${messageId}`,
         subscriptions: this.#subscriptions,
         isAuthorized: () =>
@@ -139,7 +153,7 @@ class IPCHandler<TRouter extends AnyRouter> {
       generation: 0,
       frame: mainFrameId(contents),
       removeListeners: () => {
-        contents.removeListener('did-navigate', onNavigate);
+        contents.removeListener('did-navigate', invalidate);
         contents.removeListener('did-fail-load', onFailLoad);
         contents.removeListener('destroyed', onDestroyed);
         contents.removeListener('render-process-gone', invalidate);
@@ -148,15 +162,12 @@ class IPCHandler<TRouter extends AnyRouter> {
     const invalidate = () => {
       attached.generation++;
       this.#cleanUpSubscriptions(attached.id);
-    };
-    const onNavigate = () => {
-      invalidate();
       attached.frame = mainFrameId(contents);
     };
+    // A failed load that replaced the document changed the main frame; ones that left it in place
+    // (an invalid URL, a cancelled navigation), hit a subframe, or followed a commit did not.
     const onFailLoad = () => {
-      // Failures that leave the document in place (an invalid URL, a cancelled navigation), that
-      // happen in a subframe, or that follow a commit (a truncated body) keep the tracked frame.
-      if (mainFrameId(contents) !== attached.frame) onNavigate();
+      if (mainFrameId(contents) !== attached.frame) invalidate();
     };
     const onDestroyed = () => this.detachWindow(win);
     this.#windows.set(win, attached);
@@ -165,7 +176,7 @@ class IPCHandler<TRouter extends AnyRouter> {
     // error page, which emits only `did-fail-load`. `did-start-navigation` is not used because it
     // also fires for downloads, 204 responses, and navigations cancelled in `will-navigate`, none of
     // which replace the document.
-    contents.on('did-navigate', onNavigate);
+    contents.on('did-navigate', invalidate);
     contents.on('did-fail-load', onFailLoad);
     contents.on('destroyed', onDestroyed);
     contents.on('render-process-gone', invalidate);

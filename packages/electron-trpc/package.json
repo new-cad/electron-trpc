@@ -32,6 +32,7 @@
   "files": [
     "dist",
     "src",
+    "!src/**/__tests__",
     "main.d.ts",
     "renderer.d.ts",
     "README.md"
@@ -41,8 +42,8 @@
     "build:types": "dts-bundle-generator --config ./dts-bundle-generator.config.ts && corepack pnpm run copy:types",
     "copy:readme": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\"",
     "copy:types": "node -e \"for (const file of ['main.d.ts', 'renderer.d.ts']) require('node:fs').copyFileSync('dist/' + file, file)\"",
-    "test": "vitest -c vitest.config.mts",
-    "test:ci": "vitest run -c vitest.config.mts --coverage",
+    "test": "vitest",
+    "test:ci": "vitest run --coverage",
     "test:electron": "node scripts/run-electron-tests.mjs",
     "prepublishOnly": "corepack pnpm copy:readme && corepack pnpm build",
     "changeset": "changeset",

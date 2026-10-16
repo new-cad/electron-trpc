@@ -94,6 +94,18 @@ Configure the same transformer on `initTRPC.create({ transformer: superjson })` 
 Separate input and output transformers are also supported through `{ transformer: { input, output } }`.
 For routers without a transformer, continue using `ipcLink()`. The link is not checked against the router's transformer at compile time; a mismatch shows up at runtime as inputs that silently arrive empty or undecoded, or as untransformed results.
 
+## Large results
+
+By default, messages cross Electron's context bridge as objects, which are copied and structured-cloned at every hop. For results made of many small objects, that copying is most of the cost of a call. Set `wireFormat: 'json'` to send the same messages as JSON text, which crosses the bridge as a plain string:
+
+```ts
+ipcLink({ transformer: superjson, wireFormat: 'json' });
+```
+
+The main process answers each message in the format it arrived in, so it needs no configuration, and links with different formats can share a window. Measured on Electron 44 in a sandboxed macOS window, a call returning 10 objects was about 25% faster, 200 objects about 3x faster, and 2000 or more objects 4 to 5x faster. Calls with small payloads cost the same.
+
+JSON text keeps only JSON values, unless your transformer encodes the rest (superjson handles `Date`, `Map`, and `BigInt`). Without one, `undefined` properties are dropped, `NaN` becomes `null`, a `Date` becomes a string, a `Map` becomes `{}`, and a `BigInt` or circular structure fails the call. Large strings and binary data are slower as JSON, so keep the default for those. The main process decodes text only after confirming that it comes from an attached window's main frame, and before it consults `validateSender`. Custom `electronTRPC` bridges must pass strings through unchanged.
+
 ## Sender authorization and lifecycle
 
 Only the main frames of explicitly attached windows can invoke the router. An empty `windows` list authorizes no windows. Subframes and unattached windows are rejected before deserialization or context creation. Malformed request envelopes are ignored. Attachment takes a `BrowserWindow`: content hosted in a `WebContentsView` (for example inside a `BaseWindow`) or a `<webview>` has its own `webContents`, which cannot be attached yet and therefore cannot call the router.

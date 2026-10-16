@@ -62,7 +62,6 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
-          context: {},
           id: sentCompositeId,
           input: undefined,
           path: 'testQuery',
@@ -99,7 +98,6 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
-          context: {},
           id: mutationCompositeId,
           input: 'test input',
           path: 'testMutation',
@@ -143,7 +141,6 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
-          context: {},
           id: subscriptionCompositeId,
           input: undefined,
           path: 'testSubscription',
@@ -262,7 +259,6 @@ describe('ipcLink', () => {
     expect(mock.sendMessage).toHaveBeenCalledWith({
       method: 'request',
       operation: {
-        context: {},
         id: serializeCompositeId,
         input: superjson.serialize(input),
         path: 'testInputs',
