@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createTRPCProxyClient } from '@trpc/client';
 import { initTRPC } from '@trpc/server';
+import { observable } from '@trpc/server/observable';
 import type { TRPCResponseMessage } from '@trpc/server/rpc';
 import z from 'zod';
 import type { RendererGlobalElectronTRPC } from '../../types';
@@ -11,12 +12,7 @@ const t = initTRPC.create();
 const router = t.router({
   testQuery: t.procedure.query(() => 'query success'),
   testMutation: t.procedure.input(z.string()).mutation(() => 'mutation success'),
-  testSubscription: t.procedure.subscription(() => {
-    return {
-      next: () => {},
-      complete: () => {},
-    };
-  }),
+  testSubscription: t.procedure.subscription(() => observable(() => {})),
   testInputs: t.procedure
     .input(z.object({ str: z.string(), date: z.date(), bigint: z.bigint() }))
     .query((input) => {
@@ -66,7 +62,6 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
-          context: {},
           id: sentCompositeId,
           input: undefined,
           path: 'testQuery',
@@ -103,7 +98,6 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
-          context: {},
           id: mutationCompositeId,
           input: 'test input',
           path: 'testMutation',
@@ -147,7 +141,6 @@ describe('ipcLink', () => {
       expect(mock.sendMessage).toHaveBeenCalledWith({
         method: 'request',
         operation: {
-          context: {},
           id: subscriptionCompositeId,
           input: undefined,
           path: 'testSubscription',
@@ -266,7 +259,6 @@ describe('ipcLink', () => {
     expect(mock.sendMessage).toHaveBeenCalledWith({
       method: 'request',
       operation: {
-        context: {},
         id: serializeCompositeId,
         input: superjson.serialize(input),
         path: 'testInputs',

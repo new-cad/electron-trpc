@@ -4,4 +4,4 @@
 
 Migrate the IPC transport to tRPC v11. This release requires matching tRPC client and server versions in the `^11.19.0` range.
 
-Configure custom serialization on `ipcLink({ transformer })` instead of the tRPC client. The link supports separate input/output transformers and leaves operations from preceding links unchanged. Routers without a custom transformer can continue using `ipcLink()`.
+Configure custom serialization on `ipcLink({ transformer })` instead of the tRPC client. The link supports separate input/output transformers and leaves operations from preceding links unchanged. Routers without a custom transformer can continue using `ipcLink()`. Subscriptions must return an `observable()`; tRPC v11 async-generator subscriptions are not supported over IPC.

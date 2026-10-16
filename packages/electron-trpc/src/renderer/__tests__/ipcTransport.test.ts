@@ -31,7 +31,8 @@ function connect<TRouter extends AnyRouter>(
     onMessage: (handler) => {
       receive = handler;
     },
-    sendMessage: (message: ETRPCRequest) => {
+    sendMessage: (payload) => {
+      const message = payload as ETRPCRequest;
       const id = message.method === 'request' ? message.operation.id : message.id;
       void handleIPCMessage({ router, event, message, internalId: String(id), subscriptions });
     },
@@ -49,6 +50,59 @@ afterEach(() => {
 });
 
 describe('tRPC v11 IPC transport', () => {
+  test('returns a formatted failure when input deserialization throws', async () => {
+    const t = initTRPC.create({
+      transformer: {
+        input: {
+          serialize: (value) => value,
+          deserialize: () => {
+            throw new Error('Invalid encoded input');
+          },
+        },
+        output: { serialize: (value) => value, deserialize: (value) => value },
+      },
+    });
+    const read = vi.fn();
+    const router = t.router({ read: t.procedure.input(z.unknown()).mutation(read) });
+    const { client } = connect(router);
+    await expect(client.read.mutate('bad')).rejects.toMatchObject({
+      message: 'Invalid encoded input',
+      data: { code: 'PARSE_ERROR' },
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  test.each([false, 0, '', null])('preserves falsy serialized input: %j', async (value) => {
+    const t = initTRPC.create();
+    const router = t.router({
+      echo: t.procedure.input(z.unknown()).mutation(({ input }) => input),
+    });
+    const { client } = connect(router);
+    expect(await client.echo.mutate(value)).toBe(value);
+  });
+
+  test('releases a subscription that completes synchronously', async () => {
+    const t = initTRPC.create();
+    const cleanup = vi.fn();
+    const router = t.router({
+      stream: t.procedure.subscription(() =>
+        observable<number>((emit) => {
+          emit.next(1);
+          emit.complete();
+          return cleanup;
+        })
+      ),
+    });
+    const { client, subscriptions } = connect(router);
+    const onData = vi.fn();
+    const onComplete = vi.fn();
+    client.stream.subscribe(undefined, { onData, onComplete });
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(onData).toHaveBeenCalledWith(1);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(subscriptions.size).toBe(0);
+  });
+
   test('round-trips transformed queries and mutations without changing preceding link operations', async () => {
     const t = initTRPC.create({ transformer: superjson });
     const input = z.object({ date: z.date(), count: z.bigint() });
@@ -105,11 +159,12 @@ describe('tRPC v11 IPC transport', () => {
     const onData = vi.fn();
     const onError = vi.fn();
     const subscription = client.dates.subscribe(undefined, { onData, onError });
-    await vi.waitFor(() => expect(subscriptions.size).toBe(1));
+    await vi.waitFor(() => expect(emit).toBeDefined());
     const date = new Date('2026-01-01T00:00:00Z');
     emit!.next(date);
     expect(onData).toHaveBeenCalledWith(date);
     emit!.error(new TRPCError({ code: 'FORBIDDEN', message: 'Subscription denied' }));
+    expect(subscriptions.size).toBe(0);
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
         message: 'Subscription denied',
@@ -119,8 +174,9 @@ describe('tRPC v11 IPC transport', () => {
     subscription.unsubscribe();
     expect(cleanup).toHaveBeenCalledOnce();
 
+    const previous = emit;
     const active = client.dates.subscribe(undefined, { onData });
-    await vi.waitFor(() => expect(subscriptions.size).toBe(1));
+    await vi.waitFor(() => expect(emit).not.toBe(previous));
     active.unsubscribe();
     expect(subscriptions.size).toBe(0);
     expect(cleanup).toHaveBeenCalledTimes(2);
