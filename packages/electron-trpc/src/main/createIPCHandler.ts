@@ -20,10 +20,29 @@ type HandlerOptions<TRouter extends AnyRouter> = {
 
 type AttachedWindow = {
   contents: WebContents;
+  // Cached because reading `id` from a destroyed WebContents throws.
   id: number;
+  // Bumped when the document is replaced or its renderer dies. Each request remembers the value it
+  // arrived under; queries and mutations have no `subscriptions` entry, so this is what stops them
+  // from replying into a replacement document.
   generation: number;
+  // Process and routing id of the current document's main frame. Every document gets its own, so a
+  // changed id without `did-navigate` means a failed load put Chromium's error page in its place.
+  // (`contents.mainFrame` can return the same object for the replacement, so objects are not
+  // compared.) Unreadable while the renderer is gone.
+  frame: string | undefined;
   removeListeners: () => void;
 };
+
+// Reading the main frame throws once its renderer is gone, for example after a crash.
+function mainFrameId(contents: WebContents) {
+  try {
+    const { processId, routingId } = contents.mainFrame;
+    return `${processId}:${routingId}`;
+  } catch {
+    return undefined;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -57,23 +76,35 @@ class IPCHandler<TRouter extends AnyRouter> {
   #onMessage: (event: IpcMainEvent, request: unknown) => void;
 
   constructor({ createContext, router, windows = [], validateSender }: HandlerOptions<TRouter>) {
+    // Rejected requests get no reply, so every early return below is logged for diagnosis.
     this.#onMessage = (event, request) => {
       const attached = this.#senders.get(event.sender);
-      if (
-        !attached ||
-        event.sender.isDestroyed() ||
-        !event.senderFrame ||
-        event.senderFrame !== event.sender.mainFrame ||
-        !isIPCRequest(request)
-      ) {
+      if (!attached) {
+        debug('Ignored IPC message from a webContents that is not an attached window');
+        return;
+      }
+      const frame = event.senderFrame;
+      if (event.sender.isDestroyed() || !frame || frame !== event.sender.mainFrame) {
+        debug(
+          'Ignored IPC message from a destroyed webContents or a frame other than the main frame'
+        );
+        return;
+      }
+      if (!isIPCRequest(request)) {
+        debug('Ignored malformed IPC message');
         return;
       }
       try {
-        if (validateSender && validateSender(event) !== true) return;
+        if (validateSender && validateSender(event) !== true) {
+          debug('Ignored IPC message rejected by validateSender');
+          return;
+        }
       } catch (error) {
         debug('Sender validation failed', error);
         return;
       }
+      // A document's commit is handled before its first IPC message, so a replacement document's
+      // requests are accepted under the new generation. The Electron smoke test pins this.
       const generation = attached.generation;
       const messageId = request.method === 'request' ? request.operation.id : request.id;
       void handleIPCMessage({
@@ -81,12 +112,10 @@ class IPCHandler<TRouter extends AnyRouter> {
         createContext,
         event,
         message: request,
-        internalId: `${event.sender.id}:${event.senderFrame.routingId}:${messageId}`,
+        internalId: `${event.sender.id}:${frame.routingId}:${messageId}`,
         subscriptions: this.#subscriptions,
-        isActive: () =>
-          this.#senders.get(event.sender) === attached &&
-          generation === attached.generation &&
-          !event.sender.isDestroyed(),
+        isAuthorized: () =>
+          this.#senders.get(event.sender) === attached && generation === attached.generation,
       }).catch((error: unknown) => debug('IPC request failed', error));
     };
     try {
@@ -108,28 +137,38 @@ class IPCHandler<TRouter extends AnyRouter> {
       contents,
       id: contents.id,
       generation: 0,
+      frame: mainFrameId(contents),
       removeListeners: () => {
-        contents.removeListener('did-start-navigation', onNavigation);
+        contents.removeListener('did-navigate', onNavigate);
+        contents.removeListener('did-fail-load', onFailLoad);
         contents.removeListener('destroyed', onDestroyed);
-        contents.removeListener('render-process-gone', onProcessGone);
+        contents.removeListener('render-process-gone', invalidate);
       },
     };
     const invalidate = () => {
       attached.generation++;
       this.#cleanUpSubscriptions(attached.id);
     };
-    const onNavigation = (
-      details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>
-    ) => {
-      if (details.isMainFrame && !details.isSameDocument) invalidate();
+    const onNavigate = () => {
+      invalidate();
+      attached.frame = mainFrameId(contents);
+    };
+    const onFailLoad = () => {
+      // Failures that leave the document in place (an invalid URL, a cancelled navigation), that
+      // happen in a subframe, or that follow a commit (a truncated body) keep the tracked frame.
+      if (mainFrameId(contents) !== attached.frame) onNavigate();
     };
     const onDestroyed = () => this.detachWindow(win);
-    const onProcessGone = () => invalidate();
     this.#windows.set(win, attached);
     this.#senders.set(contents, attached);
-    contents.on('did-start-navigation', onNavigation);
+    // The document is replaced either by a committed navigation (`did-navigate`) or by Chromium's
+    // error page, which emits only `did-fail-load`. `did-start-navigation` is not used because it
+    // also fires for downloads, 204 responses, and navigations cancelled in `will-navigate`, none of
+    // which replace the document.
+    contents.on('did-navigate', onNavigate);
+    contents.on('did-fail-load', onFailLoad);
     contents.on('destroyed', onDestroyed);
-    contents.on('render-process-gone', onProcessGone);
+    contents.on('render-process-gone', invalidate);
   }
 
   detachWindow(win: BrowserWindow, webContentsId?: number) {

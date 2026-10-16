@@ -66,7 +66,7 @@ describe('tRPC v11 IPC transport', () => {
     const { client } = connect(router);
     await expect(client.read.mutate('bad')).rejects.toMatchObject({
       message: 'Invalid encoded input',
-      data: { code: 'INTERNAL_SERVER_ERROR' },
+      data: { code: 'PARSE_ERROR' },
     });
     expect(read).not.toHaveBeenCalled();
   });

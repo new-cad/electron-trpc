@@ -1,5 +1,6 @@
 import {
   callTRPCProcedure,
+  getTRPCErrorFromUnknown,
   getTRPCErrorShape,
   transformTRPCResponse,
   TRPCError,
@@ -8,7 +9,6 @@ import type { AnyRouter, inferRouterContext } from '@trpc/server';
 import type { TRPCResponseMessage } from '@trpc/server/rpc';
 import type { IpcMainEvent } from 'electron';
 import { isObservable, type Unsubscribable } from '@trpc/server/observable';
-import { getTRPCErrorFromUnknown } from './utils';
 import type { CreateContextOptions } from './types';
 import { ELECTRON_TRPC_CHANNEL } from '../constants';
 import type { ETRPCRequest } from '../types';
@@ -23,7 +23,7 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   message,
   event,
   subscriptions,
-  isActive = () => true,
+  isAuthorized = () => true,
 }: {
   router: TRouter;
   createContext?: (
@@ -33,7 +33,8 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   message: ETRPCRequest;
   event: IpcMainEvent;
   subscriptions: Map<string, Unsubscribable>;
-  isActive?: () => boolean;
+  /** Whether the sender is still attached to the document this request arrived from. */
+  isAuthorized?: () => boolean;
 }) {
   if (message.method === 'subscription.stop') {
     const subscription = subscriptions.get(internalId);
@@ -47,21 +48,22 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   let ctx: inferRouterContext<TRouter> | undefined;
   let active = true;
   let subscription: Unsubscribable | undefined;
-  const pending = { unsubscribe: finish };
 
   function finish() {
     if (!active) return;
     active = false;
-    if (subscriptions.get(internalId) === pending) subscriptions.delete(internalId);
+    if (subscriptions.get(internalId) === handle) subscriptions.delete(internalId);
     try {
       subscription?.unsubscribe();
     } catch (error) {
       debug('Subscription cleanup failed', error);
     }
   }
+  const handle = { unsubscribe: finish };
 
+  const cancelled = () => !active || !isAuthorized() || event.sender.isDestroyed();
   const respond = (response: TRPCResponseMessage) => {
-    if (!active || !isActive() || event.sender.isDestroyed()) {
+    if (cancelled()) {
       finish();
       return;
     }
@@ -88,22 +90,27 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
   };
 
   if (type === 'subscription') {
-    if (subscriptions.has(internalId)) {
-      subscriptions.get(internalId)?.unsubscribe();
+    const existing = subscriptions.get(internalId);
+    if (existing) {
+      existing.unsubscribe();
       fail(new TRPCError({ code: 'CONFLICT', message: 'Subscription ID is already active' }));
       return;
     }
     // Reserve before awaiting context/resolvers so cancellation and navigation can stop pending work.
-    subscriptions.set(internalId, pending);
+    // The map holds `handle` rather than the stream because the stream does not exist yet.
+    subscriptions.set(internalId, handle);
   }
 
   try {
-    input =
-      serializedInput === undefined
-        ? undefined
-        : router._def._config.transformer.input.deserialize(serializedInput);
+    if (serializedInput !== undefined) {
+      try {
+        input = router._def._config.transformer.input.deserialize(serializedInput);
+      } catch (cause) {
+        throw new TRPCError({ code: 'PARSE_ERROR', cause });
+      }
+    }
     ctx = (await createContext?.({ event })) ?? {};
-    if (!active || !isActive()) {
+    if (cancelled()) {
       finish();
       return;
     }
@@ -116,7 +123,7 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
       getRawInput: async () => input,
       type,
     });
-    if (!active || !isActive()) {
+    if (cancelled()) {
       finish();
       return;
     }
@@ -150,6 +157,8 @@ export async function handleIPCMessage<TRouter extends AnyRouter>({
         }
       },
     });
+    // `finish()` may already have run inside `subscribe()` (synchronous complete/error), before
+    // `subscription` was assigned, so the stream still has to be released here.
     if (!active) subscription.unsubscribe();
   } catch (cause) {
     fail(cause);

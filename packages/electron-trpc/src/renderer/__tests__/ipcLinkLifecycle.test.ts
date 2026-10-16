@@ -84,6 +84,57 @@ test('server completion releases a subscription without sending another stop mes
   expect(remove).toHaveBeenCalledOnce();
 });
 
+test('aborting a live subscription stops it on the server exactly once', () => {
+  const controller = new AbortController();
+  makeClient().stream.subscribe(undefined, { signal: controller.signal, onError: vi.fn() });
+  controller.abort();
+  controller.abort();
+  expect(
+    send.mock.calls.filter(([message]) => message.method === 'subscription.stop')
+  ).toHaveLength(1);
+  expect(remove).toHaveBeenCalledOnce();
+});
+
+// Older preloads returned nothing, or the emitter returned by `ipcRenderer.on`.
+test.each([undefined, {}])(
+  'a bridge without a disposer (%j) is registered once',
+  async (legacy) => {
+    listen.mockImplementation((callback) => {
+      receive = callback;
+      return legacy as never;
+    });
+    const client = makeClient();
+    for (let index = 0; index < 3; index++) {
+      const result = client.read.query();
+      receive({ id: requestId(), result: { type: 'data', data: 'ok' } });
+      await expect(result).resolves.toBe('ok');
+    }
+    expect(listen).toHaveBeenCalledOnce();
+  }
+);
+
+test('client ids differ between documents, so a late reply cannot reach a new document', async () => {
+  // Every document starts counting clients from 1; the per-document token keeps the ids apart.
+  const ids: string[] = [];
+  for (let document = 0; document < 2; document++) {
+    vi.resetModules();
+    const { ipcLink: documentLink, MessageRouter: documentRouter } = await import('../ipcLink');
+    void createTRPCClient<typeof router>({ links: [documentLink()] }).read.query();
+    ids.push(String(requestId()));
+    documentRouter.reset();
+  }
+  expect(ids[0]).not.toBe(ids[1]);
+});
+
+test('ignores a reply addressed to a client of another document', async () => {
+  const result = makeClient().read.query();
+  const id = String(requestId());
+  receive({ id: id.replace(/-[^:]+:/, '-other:'), result: { type: 'data', data: 'stale' } });
+  expect(remove).not.toHaveBeenCalled();
+  receive({ id, result: { type: 'data', data: 'fresh' } });
+  await expect(result).resolves.toBe('fresh');
+});
+
 test('does not send an already aborted request', async () => {
   const controller = new AbortController();
   controller.abort();

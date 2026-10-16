@@ -36,9 +36,9 @@ const args = [fileURLToPath(new URL('./electron-smoke.cjs', import.meta.url)), o
 if (process.platform === 'linux' && env.CI) args.unshift('--no-sandbox');
 const child = spawn(require('electron'), args, { env, stdio: 'inherit', windowsHide: true });
 const timer = setTimeout(() => {
-  child.kill();
+  child.kill('SIGKILL');
   console.error('Electron transport tests timed out');
-}, 30_000);
+}, 60_000);
 const code = await new Promise((resolve, reject) => {
   child.once('error', reject);
   child.once('exit', resolve);

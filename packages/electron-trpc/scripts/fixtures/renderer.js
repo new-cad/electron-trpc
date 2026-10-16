@@ -15,3 +15,9 @@ window.transport = {
     subscription?.unsubscribe();
   },
 };
+
+// Requests issued while the document loads are the earliest a new document can send.
+if (location.search.includes('autostart')) {
+  window.transport.start();
+  window.autoRead = client.read.query();
+}

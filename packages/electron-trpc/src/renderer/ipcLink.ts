@@ -29,6 +29,9 @@ const getElectronTRPC = () => {
 };
 
 let clientIdCounter = 0;
+// Client ids restart in every document, so they carry a per-document token: a late reply addressed to
+// a client of the previous document can then never be routed to a client of this one.
+const documentToken = Math.random().toString(36).slice(2, 8);
 
 export class MessageRouter {
   private static instance: MessageRouter | null = null;
@@ -55,7 +58,7 @@ export class MessageRouter {
       this.removeListener = typeof remove === 'function' ? remove : undefined;
       this.isInitialized = true;
     }
-    const id = `c${++clientIdCounter}`;
+    const id = `c${++clientIdCounter}-${documentToken}`;
     this.clients.set(id, client);
     return id;
   }
@@ -149,12 +152,8 @@ class IPCClient {
     try {
       this.#clientId ??= this.#messageRouter.registerClient(this);
       this.#pendingRequests.set(id, { callbacks, finish });
-      if (signal?.aborted) {
-        abort();
-      } else {
-        signal?.addEventListener('abort', abort, { once: true });
-        this.#messageRouter.sendMessage(this.#clientId, { method: 'request', operation: op });
-      }
+      signal?.addEventListener('abort', abort, { once: true });
+      this.#messageRouter.sendMessage(this.#clientId, { method: 'request', operation: op });
     } catch (error) {
       finish(false);
       callbacks.error(clientError(error));
