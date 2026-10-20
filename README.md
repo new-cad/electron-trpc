@@ -125,9 +125,32 @@ const handler = createIPCHandler({
 
 The policy must return `true` synchronously; thrown errors reject the request. For packaged files or a development server, supply your own exact file URL or origin policy. Avoid substring checks. A rejected request receives no response, so a window that was never attached shows up as calls that never settle; every rejection is logged under the `electron-trpc:main:IPCHandler` [debug](https://www.npmjs.com/package/debug) namespace (`DEBUG=electron-trpc:*`). Router middleware remains responsible for user authorization, input validation, and application-specific limits. See Electron's [security checklist](https://www.electronjs.org/docs/latest/tutorial/security). tRPC includes stack traces with local file paths in error responses whenever `isDev` is true, and `isDev` defaults to `NODE_ENV !== 'production'`. Packaged apps usually leave `NODE_ENV` unset, so consider `initTRPC.create({ isDev: !app.isPackaged })`.
 
-Use one handler per router: the IPC channel is fixed, and attaching a window to two handlers runs each of its requests twice. `handler.attachWindow(win)` adds a trusted window, `handler.detachWindow(win)` revokes it, and `handler.dispose()` removes the handler's IPC and window listeners. Destroying a window detaches it automatically, and process exit needs no cleanup; use `dispose()` to retire a handler early (for example on hot reload). Do not call it from `before-quit`, which can be cancelled. Replacing the main-frame document (a committed navigation or Chromium's error page) and renderer crashes cancel its subscriptions; pending work cannot create a subscription or reply into the replacement document. Work that is revoked this way, or by `detachWindow` and `dispose`, gets no reply. Navigations that leave the document in place (in-page navigation, downloads, navigations cancelled in `will-navigate`, loads that fail without replacing the page, such as an invalid URL) and subframe navigation leave main-frame subscriptions running.
+Use a single handler: the IPC channel is fixed, and attaching a window to two handlers runs each of its requests twice. To serve several routers, give that handler a `resolveRouter` (see [Several routers](#several-routers)). `handler.attachWindow(win)` adds a trusted window, `handler.detachWindow(win)` revokes it, and `handler.dispose()` removes the handler's IPC and window listeners. Destroying a window detaches it automatically, and process exit needs no cleanup; use `dispose()` to retire a handler early (for example on hot reload). Do not call it from `before-quit`, which can be cancelled. Replacing the main-frame document (a committed navigation or Chromium's error page) and renderer crashes cancel its subscriptions; pending work cannot create a subscription or reply into the replacement document. Work that is revoked this way, or by `detachWindow` and `dispose`, gets no reply. Navigations that leave the document in place (in-page navigation, downloads, navigations cancelled in `will-navigate`, loads that fail without replacing the page, such as an invalid URL) and subframe navigation leave main-frame subscriptions running.
 
 Client unsubscription and `AbortSignal` cancellation release renderer listeners and stop subscriptions, including those waiting for context or resolver completion. Cancellation does not roll back a query or mutation already executing in the main process. Update the preload alongside the renderer to enable listener removal; older custom bridges returning no disposer remain compatible but retain their single message listener.
+
+## Several routers
+
+One handler can serve a different router to each window, for example when each window works on its own database. `resolveRouter` receives each request's `IpcMainEvent` after the sender checks and returns the router that serves it; `router` serves the requests for which it returns `undefined`.
+
+```ts
+const routers = new Map<WebContents, AppRouter>();
+
+const handler = createIPCHandler({
+  router: defaultRouter,
+  resolveRouter: (event) => routers.get(event.sender),
+});
+
+function openWindow(router: AppRouter) {
+  const win = new BrowserWindow({ webPreferences: { preload: 'path/to/preload.js' } });
+  routers.set(win.webContents, router);
+  win.once('closed', () => routers.delete(win.webContents));
+  handler.attachWindow(win);
+  return win;
+}
+```
+
+The routers share one type, so one client type fits every window, and `createContext` serves them all. A `resolveRouter` that throws rejects the request, as `validateSender` does. Stopping a subscription does not consult it.
 
 ## Development
 

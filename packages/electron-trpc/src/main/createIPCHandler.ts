@@ -13,6 +13,11 @@ type HandlerOptions<TRouter extends AnyRouter> = {
   createContext?: ContextFactory<TRouter>;
   windows?: BrowserWindow[];
   validateSender?: (event: IpcMainEvent) => boolean;
+  /**
+   * Picks the router that serves a request, such as the one of the sender's window. Called for
+   * each procedure call after the sender checks; `router` serves it when this returns undefined.
+   */
+  resolveRouter?: (event: IpcMainEvent) => TRouter | undefined;
 };
 
 type AttachedWindow = {
@@ -69,7 +74,13 @@ class IPCHandler<TRouter extends AnyRouter> {
   #disposed = false;
   #onMessage: (event: IpcMainEvent, payload: unknown) => void;
 
-  constructor({ createContext, router, windows = [], validateSender }: HandlerOptions<TRouter>) {
+  constructor({
+    createContext,
+    router,
+    windows = [],
+    validateSender,
+    resolveRouter,
+  }: HandlerOptions<TRouter>) {
     // Rejected requests get no reply, so every early return below is logged for diagnosis.
     this.#onMessage = (event, payload) => {
       const attached = this.#senders.get(event.sender);
@@ -116,12 +127,22 @@ class IPCHandler<TRouter extends AnyRouter> {
         debug('Sender validation failed', error);
         return;
       }
+      // Stopping a subscription needs no router, so a failing resolver cannot keep one running.
+      let requestRouter = router;
+      if (resolveRouter && request.method === 'request') {
+        try {
+          requestRouter = resolveRouter(event) ?? router;
+        } catch (error) {
+          debug('Router resolution failed', error);
+          return;
+        }
+      }
       // A document's commit is handled before its first message, so a replacement document's requests
       // arrive under the new generation (the Electron smoke test pins this).
       const generation = attached.generation;
       const messageId = request.method === 'request' ? request.operation.id : request.id;
       void handleIPCMessage({
-        router,
+        router: requestRouter,
         createContext,
         event,
         message: request,

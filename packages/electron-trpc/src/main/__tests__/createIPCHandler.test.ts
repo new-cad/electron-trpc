@@ -246,6 +246,82 @@ describe('IPC sender boundary', () => {
   });
 });
 
+describe('router per request', () => {
+  const namedRouter = (name: string) => {
+    const t = initTRPC.create();
+    return t.router({ read: t.procedure.query(() => name) });
+  };
+  const replyData = (reply: ReturnType<typeof vi.fn>) => reply.mock.calls[0][1].result.data;
+
+  test('serves each request with the router resolved for its sender', async () => {
+    const first = windowFixture(1);
+    const second = windowFixture(2);
+    const routers = new Map<unknown, ReturnType<typeof namedRouter>>([
+      [first.contents, namedRouter('first')],
+      [second.contents, namedRouter('second')],
+    ]);
+    track(
+      createIPCHandler({
+        router: namedRouter('default'),
+        windows: [first.win, second.win],
+        resolveRouter: (event) => routers.get(event.sender),
+      })
+    );
+    send(first.event, request());
+    send(second.event, request());
+    await vi.waitFor(() => expect(second.reply).toHaveBeenCalledOnce());
+    expect(replyData(first.reply)).toBe('first');
+    expect(replyData(second.reply)).toBe('second');
+  });
+
+  test('falls back to the default router when none is resolved', async () => {
+    const target = attach({ router: namedRouter('default'), resolveRouter: () => undefined });
+    send(target.event, request());
+    await vi.waitFor(() => expect(target.reply).toHaveBeenCalledOnce());
+    expect(replyData(target.reply)).toBe('default');
+  });
+
+  test('is consulted only for senders that passed the sender checks', async () => {
+    const resolveRouter = vi.fn(() => undefined);
+    const target = attach({ resolveRouter, validateSender: () => false });
+    send(windowFixture(2).event, request());
+    send(target.event, request());
+    await flush();
+    expect(resolveRouter).not.toHaveBeenCalled();
+  });
+
+  test('fails closed if resolving the router throws', async () => {
+    const createContext = vi.fn();
+    const target = attach({
+      createContext,
+      resolveRouter: () => {
+        throw new Error('No router');
+      },
+    });
+    expect(() => send(target.event, request())).not.toThrow();
+    await flush();
+    expect(createContext).not.toHaveBeenCalled();
+    expect(target.reply).not.toHaveBeenCalled();
+  });
+
+  test('stops a subscription without resolving a router', async () => {
+    const stream = streamRouter();
+    let resolvable = true;
+    const target = attach({
+      router: stream.router,
+      resolveRouter: () => {
+        if (!resolvable) throw new Error('No router');
+        return undefined;
+      },
+    });
+    send(target.event, request('c1:1', 'subscription', 'stream'));
+    await vi.waitFor(() => expect(stream.subscribed).toHaveBeenCalledOnce());
+    resolvable = false;
+    send(target.event, { method: 'subscription.stop', id: 'c1:1' });
+    await vi.waitFor(() => expect(stream.cleanup).toHaveBeenCalledOnce());
+  });
+});
+
 describe('handler lifecycle', () => {
   test('rolls back attached listeners if a later constructor window is destroyed', () => {
     const target = windowFixture(1);
