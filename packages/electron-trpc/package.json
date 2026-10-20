@@ -1,7 +1,7 @@
 {
   "name": "@new-cad/electron-trpc",
   "description": "Electron support for tRPC",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/new-cad/electron-trpc.git"
